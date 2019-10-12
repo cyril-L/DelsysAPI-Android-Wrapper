@@ -9,7 +9,7 @@
     <OutputType>Library</OutputType>
     <RootNamespace>AndroidSample</RootNamespace>
     <AssemblyName>Sample.Android</AssemblyName>
-    <AndroidApplication>True</AndroidApplication>
+    <!-- <AndroidApplication>True</AndroidApplication> -->
     <AndroidResgenFile>Resources\Resource.designer.cs</AndroidResgenFile>
     <AndroidResgenClass>Resource</AndroidResgenClass>
     <AndroidManifest>Properties\AndroidManifest.xml</AndroidManifest>
