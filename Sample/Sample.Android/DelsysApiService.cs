@@ -22,6 +22,7 @@ using DelsysAPI.Transforms;
 using DelsysAPI.Channels.Transform;
 using Android.Content;
 using Java.Interop;
+using System.Text;
 
 namespace AndroidSample
 
@@ -120,7 +121,7 @@ namespace AndroidSample
         #region Initialization
 
         [Export("initialize")]
-        public void InitializeDataSource(string publicKey, string license)
+        public void InitializeDataSource(string publicKey, string license, Java.Util.IQueue logger)
         {
             Log.Info(tag, "Initializing");
             // The API uses a factory method to create the data source of your application.
@@ -129,7 +130,11 @@ namespace AndroidSample
             var deviceSourceCreator = new DelsysAPI.Android.DeviceSourcePortable(publicKey, license);
             // Sets the output stream for debugging information from the API. This could be a file stream,
             // but in this example we simply use the Console.WriteLine output stream.
-            deviceSourceCreator.SetDebugOutputStream(Console.WriteLine);
+            deviceSourceCreator.SetDebugOutputStream(delegate (String format, object[] args)
+            {
+                logger.Add(String.Format(format, args));
+                Console.WriteLine(format, args);
+            });
             // Here is where we tell the factory method what type of data source we want to receive,
             // which we then set a reference to for future use.
             DeviceSource = deviceSourceCreator.GetDataSource(SourceType.TRIGNO_BT);
