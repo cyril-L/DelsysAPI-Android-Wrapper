@@ -1,17 +1,13 @@
 ﻿using System;
 
 using Android.App;
-using Android.Content.PM;
-using Android.Runtime;
-using Android.Views;
-using Android.Widget;
 using Android.OS;
+using Android.Runtime;
+using Android.Util;
 using DelsysAPI.Pipelines;
 using DelsysAPI.Contracts;
 using System.Collections.Generic;
 using DelsysAPI.DelsysDevices;
-using Android.Support.V4.App;
-using Android;
 using DelsysAPI.Events;
 using System.Linq;
 using System.Threading.Tasks;
@@ -24,21 +20,33 @@ using DelsysAPI.Configurations;
 using DelsysAPI.Configurations.Component;
 using DelsysAPI.Transforms;
 using DelsysAPI.Channels.Transform;
-using System.Reflection;
+using Android.Content;
+using Java.Interop;
 
 namespace AndroidSample
 
 {
-
-    [Activity(Label = "@string/app_name", Theme = "@style/AppTheme.NoActionBar", MainLauncher = true)]
-    public class MainActivity : Android.Support.V7.App.AppCompatActivity
+    [Register("lu.cyril.delsys.sample.DelsysApiServiceBinder")]
+    public class DelsysApiServiceBinder : Binder
     {
-        // Defining buttons for UI
-        public Button ScanButton;
-        public Button ArmButton;
-        public Button StreamButton;
-        public Button StopButton;
+        private DelsysApiService Service;
 
+        public DelsysApiServiceBinder(DelsysApiService service)
+        {
+            this.Service = service;
+        }
+
+        [Export("getService")]
+        public DelsysApiService GetService()
+        {
+            return Service;
+        }
+    }
+
+    [Service(Name = "lu.cyril.delsys.sample.DelsysApiService"), Register("lu.cyril.delsys.sample.DelsysApiService")]
+    public class DelsysApiService : Service
+    {
+        string tag = "DelsysApiService";
 
         Pipeline BTPipeline;
         ITransformManager TransformManager;
@@ -60,87 +68,30 @@ namespace AndroidSample
         int TotalLostPackets = 0;
         int TotalDataPoints = 0;
 
-        protected override void OnCreate(Bundle savedInstanceState)
+        public IBinder Binder { get; private set; }
+
+        public override IBinder OnBind(Intent intent)
         {
-            base.OnCreate(savedInstanceState);
-
-            SetContentView(Resource.Layout.activity_main);
-
-            Android.Support.V7.Widget.Toolbar toolbar = FindViewById<Android.Support.V7.Widget.Toolbar>(Resource.Id.toolbar);
-            SetSupportActionBar(toolbar);
-
-            ScanButton = FindViewById<Button>(Resource.Id.btn_Scan);
-            ScanButton.Click += clk_Scan;
-
-            ArmButton = FindViewById<Button>(Resource.Id.btn_Arm);
-            ArmButton.Click += clk_Arm;
-
-            StreamButton = FindViewById<Button>(Resource.Id.btn_Stream);
-            StreamButton.Click += clk_Start;
-
-            StopButton = FindViewById<Button>(Resource.Id.btn_Stop);
-            StopButton.Click += clk_Stop;
-
-            StreamButton.Enabled = false;
-            ArmButton.Enabled = false;
-            ScanButton.Enabled = true;
-            StopButton.Enabled = false;
-
-            CheckAppPermissions();
-
-            InitializeDataSource();
-        }
-
-        public override bool OnCreateOptionsMenu(IMenu menu)
-        {
-            MenuInflater.Inflate(Resource.Menu.menu_main, menu);
-            return true;
-        }
-
-        public override bool OnOptionsItemSelected(IMenuItem item)
-        {
-            int id = item.ItemId;
-            if (id == Resource.Id.action_settings)
-            {
-                return true;
-            }
-
-            return base.OnOptionsItemSelected(item);
+            Log.Info(tag, "Returning binder to activity");
+            this.Binder = new DelsysApiServiceBinder(this);
+            return this.Binder;
         }
 
         #region Button Events (Scan, Start, and Stop)
 
-        // Check and request permissions
-        private void CheckAppPermissions()
+        [Export("start")]
+        public void Start()
         {
-            if ((int)Build.VERSION.SdkInt < 23)
-            {
-                return;
-            }
-            else
-            {
-                if (PackageManager.CheckPermission(Manifest.Permission.ReadExternalStorage, PackageName) != Permission.Granted
-                    && PackageManager.CheckPermission(Manifest.Permission.WriteExternalStorage, PackageName) != Permission.Granted)
-                {
-                    var permissions = new string[] { Manifest.Permission.ReadExternalStorage, Manifest.Permission.WriteExternalStorage, Manifest.Permission.AccessCoarseLocation, Manifest.Permission.AccessFineLocation };
-                    RequestPermissions(permissions, 1);
-                }
-            }
-        }
-
-        public void clk_Start(object sender, EventArgs e)
-        {
+            Log.Info(tag, "Starting");
             // The pipeline must be reconfigured before it can be started again.
             ConfigurePipeline();
             BTPipeline.Start();
-            StreamButton.Enabled = false;
-            ArmButton.Enabled = false;
-            ScanButton.Enabled = false;
-            StopButton.Enabled = true;
         }
 
-        public void clk_Arm(object sender, EventArgs e)
+        [Export("arm")]
+        public void Arm()
         {
+            Log.Info(tag, "Arming");
             // Select every component we found and didn't filter out.
             foreach (var component in BTPipeline.TrignoBtManager.Components)
             {
@@ -148,61 +99,34 @@ namespace AndroidSample
             }
 
             ConfigurePipeline();
-            StreamButton.Enabled = true;
-            ArmButton.Enabled = false;
-            ScanButton.Enabled = true;
-            StopButton.Enabled = false;
         }
 
-        public void clk_Scan(object sender, EventArgs e)
+        [Export("scan")]
+        public void Scan()
         {
-            StreamButton.Enabled = false;
-            ArmButton.Enabled = false;
-            ScanButton.Enabled = false;
-            StopButton.Enabled = false;
-
+            Log.Info(tag, "Scaning");
             BTPipeline.Scan();
         }
 
-        public void clk_Stop(object sender, EventArgs e)
+        [Export("stop")]
+        public void Stop()
         {
+            Log.Info(tag, "Stoping");
             BTPipeline.Stop();
-            StreamButton.Enabled = true;
-            ArmButton.Enabled = false;
-            ScanButton.Enabled = false;
-            StopButton.Enabled = false;
         }
 
         #endregion
 
         #region Initialization
 
-        public void InitializeDataSource()
+        [Export("initialize")]
+        public void InitializeDataSource(string publicKey, string license)
         {
-            int SUCCESS = 0;
-            ActivityCompat.RequestPermissions(this, new String[] { Manifest.Permission.AccessCoarseLocation }, SUCCESS);
-
-            // Load your license and key files
-            // This tutorial assumes you have them contained in embedded resources named PublicKey.lic and License.lic, as part of
-            // a solution with an output executable called AndroidSample.
-            var assembly = Assembly.GetExecutingAssembly();
-            string key;
-            using (Stream stream = assembly.GetManifestResourceStream("AndroidSample.PublicKey.lic")) // Change the name of the .lic file accordingly
-            {
-                StreamReader sr = new StreamReader(stream);
-                key = sr.ReadLine();
-            }
-            string lic;
-            using (Stream stream = assembly.GetManifestResourceStream("AndroidSample.License.lic")) // Change the name of the .lic file accordingly
-            {
-                StreamReader sr = new StreamReader(stream);
-                lic = sr.ReadToEnd();
-            }
-
+            Log.Info(tag, "Initializing");
             // The API uses a factory method to create the data source of your application.
             // This creates the factory method, which will then give the data source for your platform.
             // In this case the platform is BT.
-            var deviceSourceCreator = new DelsysAPI.Android.DeviceSourcePortable(key, lic);
+            var deviceSourceCreator = new DelsysAPI.Android.DeviceSourcePortable(publicKey, license);
             // Sets the output stream for debugging information from the API. This could be a file stream,
             // but in this example we simply use the Console.WriteLine output stream.
             deviceSourceCreator.SetDebugOutputStream(Console.WriteLine);
@@ -210,8 +134,8 @@ namespace AndroidSample
             // which we then set a reference to for future use.
             DeviceSource = deviceSourceCreator.GetDataSource(SourceType.TRIGNO_BT);
             // Here we use the key and license we previously loaded.
-            DeviceSource.Key = key;
-            DeviceSource.License = lic;
+            DeviceSource.Key = publicKey;
+            DeviceSource.License = license;
             //Load source
             LoadDataSource(DeviceSource);
             // Create a reference to the first Pipeline (which was generated by the factory method above)
@@ -259,10 +183,11 @@ namespace AndroidSample
 
         private void ComponentScanComplete(object sender, DelsysAPI.Events.ComponentScanCompletedEventArgs e)
         {
-            StreamButton.Enabled = false;
-            ArmButton.Enabled = true;
-            ScanButton.Enabled = true;
-            StopButton.Enabled = false;
+            // FIXME callback example
+            //StreamButton.Enabled = false;
+            //ArmButton.Enabled = true;
+            //ScanButton.Enabled = true;
+            //StopButton.Enabled = false;
         }
 
         #endregion
