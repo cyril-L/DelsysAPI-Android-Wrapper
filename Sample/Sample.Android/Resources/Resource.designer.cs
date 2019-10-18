@@ -9,9 +9,9 @@
 // </auto-generated>
 //------------------------------------------------------------------------------
 
-[assembly: global::Android.Runtime.ResourceDesignerAttribute("AndroidSample.Resource", IsApplication=false)]
+[assembly: global::Android.Runtime.ResourceDesignerAttribute("DelsysAndroidWrapper.Resource", IsApplication=false)]
 
-namespace AndroidSample
+namespace DelsysAndroidWrapper
 {
 	
 	

@@ -16,9 +16,9 @@ using DelsysAPI.Components.TrignoBT;
 
 // TODO query battery BTPipeline.TrignoBtManager.QueryBatteryComponentAsync(comp).Result
 
-namespace AndroidSample
+namespace DelsysAndroidWrapper
 {
-    [Register("fr.trinoma.daq.delsys.DelsysApiWrapper")]
+    [Register("fr.trinoma.daq.delsys.androidwrapper.DelsysApiWrapper")]
     public class DelsysApiWrapper : Java.Lang.Object
     {
         Pipeline BTPipeline;
@@ -151,7 +151,7 @@ namespace AndroidSample
                 if (component.State == SelectionState.Allocated
                     && component.SensorConfiguration.IsComponentAvailable())
                 {
-                        numChannels += component.BtChannels.Count;
+                    numChannels += component.BtChannels.Count;
                 }
             }
 
