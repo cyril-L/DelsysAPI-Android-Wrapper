@@ -14,7 +14,34 @@ using Java.Interop;
 using System.Threading;
 using DelsysAPI.Components.TrignoBT;
 
+/*
+ * Design choices
+ *
+ * When generating wrappers, Embbedinator seems to strip the type of generic
+ * collections (ArrayList instead of ArrayList<String>). This forces to cast
+ * everything on the Java side. Because of this:
+ * - List are exposed as arrays (string[] instead of List<string>)
+ * - Data is exposed with objects (ComponentInfo instead of Dictionnary<string>
+ *
+ * Calling Java from C# is a bit messy
+ * https://docs.microsoft.com/en-us/xamarin/tools/dotnet-embedding/android/callbacks
+ * Because of this the interface have made synchronous. For example instead
+ * of Scan() + onScanComplete(result), a blocking Scan() returning the result
+ * is exposed. All the methods exposed are blocking.
+ *
+ * To allow the client to use the data storage it wants, a ByteBuffer is used
+ * to store the result. Allowing the client to use a direct ByteBuffer if he
+ * wants to process the data in native code, or a double[] if processed in Java
+ * For now the client is responsible of computing the correct capacity of the
+ * buffer.
+ *
+ * The C# API looks more complex than necessary for the user. Only a trivial
+ * interface is exposed to Java for now.
+ */
+
 // TODO query battery BTPipeline.TrignoBtManager.QueryBatteryComponentAsync(comp).Result
+// TODO expose as Singleton
+// TODO get raw data?
 
 namespace DelsysAndroidWrapper
 {
@@ -22,29 +49,6 @@ namespace DelsysAndroidWrapper
     public class DelsysApiWrapper : Java.Lang.Object
     {
         Pipeline BTPipeline;
-
-        #region Button Events (Scan, Start, and Stop)
-
-        [Export("start")]
-        public void Start()
-        {
-            BTPipeline.Start().Wait();
-        }
-
-        [Export("scan")]
-        public JavaList<JavaDictionary<string, string>> Scan()
-        {
-            BTPipeline.Scan().Wait();
-            return ListDevices();
-        }
-
-        [Export("stop")]
-        public void Stop()
-        {
-            BTPipeline.Stop().Wait();
-        }
-
-        #endregion
 
         #region Initialization
 
@@ -54,52 +58,51 @@ namespace DelsysAndroidWrapper
             var deviceSourceCreator = new DelsysAPI.Android.DeviceSourcePortable(publicKey, license);
             deviceSourceCreator.SetDebugOutputStream(Console.WriteLine);
             var source = deviceSourceCreator.GetDataSource(SourceType.TRIGNO_BT);
-            // Here we use the key and license we previously loaded.
-            source.Key = publicKey;
-            source.License = license;
 
             PipelineController.Instance.AddPipeline(source);
-
             BTPipeline = PipelineController.Instance.PipelineIds[0];
 
             BTPipeline.CollectionDataReady += CollectionDataReady;
+        }
 
-            // Other available callbacks CollectionStarted, CollectionComplete,
-            // ComponentAdded, ComponentLost, ComponentRemoved, ComponentScanComplete
+        #endregion
+
+        #region Scanning devices
+
+        [Export("scan")]
+        public ComponentInfo[] Scan()
+        {
+            BTPipeline.Scan().Wait();
+            return ListDevices();
         }
 
         [Export("listDevices")]
-        public JavaList<JavaDictionary<string, string>> ListDevices()
+        public ComponentInfo[] ListDevices()
         {
-            var devices = new JavaList<JavaDictionary<string, string>>();
+            var devices = new ComponentInfo[BTPipeline.TrignoBtManager.Components.Count];
+            var i = 0;
             foreach (var component in BTPipeline.TrignoBtManager.Components)
             {
                 // TODO just after scan component Serial Number and Type is not
                 // filled. When is it populated?
-                devices.Add(new JavaDictionary<string, string>() {
-                    {"id", component.Id.ToString()},
-                    {"name", component.Name},
-                    {"serial", component.Properties.SerialNumber},
-                    {"type", component.Properties.SensorType},
-                    {"modes", String.Join(", ", component.SensorConfiguration.SampleModes)},
-                });
+                devices[i++] = new ComponentInfo {
+                    id = component.Id.ToString(),
+                    name = component.Name,
+                    serial = component.Properties.SerialNumber,
+                    sensorType = component.Properties.SensorType,
+                    modes = component.SensorConfiguration.SampleModes
+                };
             }
             return devices;
         }
 
-        private SensorTrignoBt getComponentById(string id) {
-            foreach (var component in BTPipeline.TrignoBtManager.Components)
-            {
-                if (component.Id.ToString() == id)
-                {
-                    return component;
-                }
-            }
-            return null;
-        }
+        #endregion
+
+        #region Pipeline configuration
 
         [Export("arm")]
-        public JavaList<JavaDictionary<string, string>> Arm(JavaDictionary<string, JavaDictionary<string, string>> devicesConfig)
+        //public ChanelInfo[] Arm(ComponentConfig[] componentConfigs)
+        public ChanelInfo[] Arm(JavaList<ComponentConfig> componentConfigs)
         {
             // This sequence have been extracted from the Android BT example
             // from Delsys. I don’t really understand why it is that convoluted,
@@ -114,25 +117,19 @@ namespace DelsysAndroidWrapper
                 BTPipeline.Stop().Wait();
             }
 
-            foreach (var entry in devicesConfig)
+            foreach (var config in componentConfigs)
             {
-                var componentId = entry.Key;
-                var component = getComponentById(entry.Key);
+                var component = getComponentById(config.componentId);
                 if (component == null) {
-                    Console.WriteLine("Unable to find component {0}", componentId);
+                    Console.WriteLine("Unable to find component {0}", config.componentId);
                     return null;
                 }
-                string mode;
-                if (!entry.Value.TryGetValue("mode", out mode)) {
-                    Console.WriteLine("No mode provided for component {0}", componentId);
-                    return null;
-                }
-                if (Array.IndexOf(component.SensorConfiguration.SampleModes, mode) < 0)
+                if (Array.IndexOf(component.SensorConfiguration.SampleModes, config.mode) < 0)
                 {
-                    Console.WriteLine("Component {0} does not supports mode {1}", componentId, mode);
+                    Console.WriteLine("Component {0} does not supports mode {1}", config.componentId, config.mode);
                     return null;
                 }
-                component.SensorConfiguration.SelectSampleMode(mode);
+                component.SensorConfiguration.SelectSampleMode(config.mode);
                 BTPipeline.TrignoBtManager.SelectComponentAsync(component).Wait();
             }
 
@@ -165,7 +162,7 @@ namespace DelsysAndroidWrapper
             var outconfig = new OutputConfig();
             outconfig.NumChannels = numChannels;
 
-            var channelsInfo = new JavaList<JavaDictionary<string, string>>();
+            var channelsInfo = new ChanelInfo[numChannels];
 
             int channelIndex = 0;
             foreach (var component in BTPipeline.TrignoBtManager.Components)
@@ -180,13 +177,12 @@ namespace DelsysAndroidWrapper
                         BTPipeline.TransformManager.AddOutputChannel(rawDataTransform, chout);
                         // Channel index defines how is the data ordered when received on CollectionDataReady callback
                         outconfig.MapOutputChannel(channelIndex, chout);
-                        channelsInfo.Add(new JavaDictionary<string, string>() {
-                            {"component", component.Id.ToString()},
-                            {"name", channel.Name},
-                            {"samplesPerFrame", channel.SamplesPerFrame.ToString()},
-                            {"unit", channel.Unit.ToString()},
-                            {"frameInterval", channel.FrameInterval.ToString()},
-                        });
+                        channelsInfo[channelIndex] = new ChanelInfo {
+                            componentId = component.Id.ToString(),
+                            samplesPerFrame = channel.SamplesPerFrame,
+                            frameInterval = channel.FrameInterval,
+                            unit = channel.Unit.ToString(),
+                        };
                         channelIndex++;
                     }
                 }
@@ -198,9 +194,27 @@ namespace DelsysAndroidWrapper
             return channelsInfo;
         }
 
+        private SensorTrignoBt getComponentById(string id)
+        {
+            foreach (var component in BTPipeline.TrignoBtManager.Components)
+            {
+                if (component.Id.ToString() == id)
+                {
+                    return component;
+                }
+            }
+            return null;
+        }
+
         #endregion
 
-        #region Collection Callbacks -- Data Ready, Colleciton Started, and Collection Complete
+        #region Streaming data to a Java ByteBuffer
+
+        [Export("start")]
+        public void Start()
+        {
+            BTPipeline.Start().Wait();
+        }
 
         private readonly object outputBufferLock = new object();
         private readonly AutoResetEvent outputBufferWritten = new AutoResetEvent(false);
@@ -240,6 +254,125 @@ namespace DelsysAndroidWrapper
                 outputBufferWritten.Set();
             }
         }
+
+        [Export("stop")]
+        public void Stop()
+        {
+            BTPipeline.Stop().Wait();
+        }
+
         #endregion
     }
+
+    #region Structured objects used to expose information to the Java user
+
+    [Register("fr.trinoma.daq.delsys.androidwrapper.ComponentInfo")]
+    public class ComponentInfo : Java.Lang.Object
+    {
+        public string id;
+        public string name;
+        public string serial;
+        public string sensorType;
+        public string[] modes;
+
+        [Export("getId")]
+        public string GetId() {
+            return id;
+        }
+
+        [Export("getName")]
+        public string GetName() {
+            return name;
+        }
+
+        [Export("getSerial")]
+        public string GetSerial()  {
+            return serial;
+        }
+
+        [Export("getSensorType")]
+        public string GetSensorType() {
+            return sensorType;
+        }
+
+        [Export("getModes")]
+        public string[] GetModes() {
+            return modes;
+        }
+    }
+
+    [Register("fr.trinoma.daq.delsys.androidwrapper.ChannelInfo")]
+    public class ChanelInfo : Java.Lang.Object
+    {
+        public string componentId;
+        public int samplesPerFrame;
+        public double frameInterval;
+        public string unit;
+
+        [Export("getComponentId")]
+        public string GetComponentId()
+        {
+            return componentId;
+        }
+
+        [Export("getSamplesPerFrame")]
+        public int GetSamplesPerFrame()
+        {
+            return samplesPerFrame;
+        }
+
+        [Export("getFrameInterval")]
+        public double GetFrameInterval()
+        {
+            return frameInterval;
+        }
+
+        [Export("getUnit")]
+        public string GetUnit()
+        {
+            return unit;
+        }
+    }
+
+    [Register("fr.trinoma.daq.delsys.androidwrapper.ComponentConfig")]
+    public class ComponentConfig : Java.Lang.Object
+    {
+        public string componentId;
+        public string mode;
+
+        private ComponentConfig() { }
+
+        // TODO I got an error at runtime when using this constructor in Java
+        // android.runtime.JavaProxyThrowable: System.NotSupportedException:
+        // Don't know how to convert type 'System.String' to an Android.Runtime.IJavaObject.
+        //public ComponentConfig(string componentId, string mode)
+        //{
+        //    this.componentId = componentId;
+        //    this.mode = mode;
+        //}
+        //
+        // Used a factory method instead
+        [Export("create")]
+        public static ComponentConfig Create(string componentId, string mode) {
+            return new ComponentConfig()
+            {
+                componentId = componentId,
+                mode = mode
+            };
+        }
+
+        [Export("getComponentId")]
+        public string GetComponentId()
+        {
+            return componentId;
+        }
+
+        [Export("getMode")]
+        public string GetMode()
+        {
+            return mode;
+        }
+    }
+
+    #endregion
 }
