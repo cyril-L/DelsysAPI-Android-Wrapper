@@ -70,10 +70,11 @@ namespace DelsysAndroidWrapper
         #region Scanning devices
 
         [Export("scan")]
-        public ComponentInfo[] Scan()
+        public bool Scan()
         {
-            BTPipeline.Scan().Wait();
-            return ListDevices();
+            var task = BTPipeline.Scan();
+            task.Wait();
+            return task.Result;
         }
 
         [Export("listDevices")]
@@ -101,21 +102,11 @@ namespace DelsysAndroidWrapper
         #region Pipeline configuration
 
         [Export("arm")]
-        //public ChanelInfo[] Arm(ComponentConfig[] componentConfigs)
         public ChanelInfo[] Arm(JavaList<ComponentConfig> componentConfigs)
         {
             // This sequence have been extracted from the Android BT example
             // from Delsys. I don’t really understand why it is that convoluted,
             // but I kept it like this for now.
-
-            if (BTPipeline.CurrentState == Pipeline.ProcessState.OutputsConfigured || BTPipeline.CurrentState == Pipeline.ProcessState.Armed)
-            {
-                BTPipeline.DisarmPipeline().Wait();
-            }
-            if (BTPipeline.CurrentState == Pipeline.ProcessState.Running)
-            {
-                BTPipeline.Stop().Wait();
-            }
 
             foreach (var config in componentConfigs)
             {
@@ -188,9 +179,11 @@ namespace DelsysAndroidWrapper
                 }
             }
 
-            BTPipeline.ApplyOutputConfigurations(outconfig);
-            BTPipeline.RunTime = Double.MaxValue;
+            if (!BTPipeline.ApplyOutputConfigurations(outconfig)) {
+                return null;
+            }
 
+            BTPipeline.RunTime = Double.MaxValue;
             return channelsInfo;
         }
 
@@ -206,14 +199,24 @@ namespace DelsysAndroidWrapper
             return null;
         }
 
+        [Export("disarm")]
+        public bool Disarm()
+        {
+            var task = BTPipeline.DisarmPipeline();
+            task.Wait();
+            return task.Result;
+        }
+
         #endregion
 
         #region Streaming data to a Java ByteBuffer
 
         [Export("start")]
-        public void Start()
+        public bool Start()
         {
-            BTPipeline.Start().Wait();
+            var task = BTPipeline.Start();
+            task.Wait();
+            return task.Result;
         }
 
         private readonly object outputBufferLock = new object();
@@ -221,12 +224,17 @@ namespace DelsysAndroidWrapper
         private Java.Nio.ByteBuffer outputBuffer;
 
         [Export("read")]
-        public void Read(Java.Nio.ByteBuffer output)
+        public bool Read(Java.Nio.ByteBuffer output)
         {
             lock (outputBufferLock) {
                 outputBuffer = output;
             }
-            outputBufferWritten.WaitOne();
+            while (!outputBufferWritten.WaitOne(100)) {
+                if (BTPipeline.CurrentState != Pipeline.ProcessState.Running) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         public void CollectionDataReady(object sender, ComponentDataReadyEventArgs e)
@@ -256,9 +264,17 @@ namespace DelsysAndroidWrapper
         }
 
         [Export("stop")]
-        public void Stop()
+        public bool Stop()
         {
-            BTPipeline.Stop().Wait();
+            var task = BTPipeline.Stop();
+            task.Wait();
+            return task.Result;
+        }
+
+        [Export("getState")]
+        public Pipeline.ProcessState GetState()
+        {
+            return BTPipeline.CurrentState;
         }
 
         #endregion
